@@ -4,39 +4,36 @@ import socket from "../services/socket";
 function Home() {
   const [users, setUsers] = useState([]);
   const [roomId, setRoomId] = useState("");
+  const [connectedCount, setConnectedCount] = useState(0);
   const localVideoRef = useRef(null);
   const peers = useRef({});
   let localStream;
 
-  // Create or join room
+  // --- Room actions
   const createRoom = () => socket.emit("create-room");
   const joinRoom = () => roomId && socket.emit("join-room", roomId);
 
   useEffect(() => {
+    // Room events
     socket.on("room-created", (id) => {
       setRoomId(id);
-      console.log("Room created:", id);
     });
 
     socket.on("room-users", (ids) => {
       setUsers(ids);
+      setConnectedCount(ids.length);
     });
 
     // WebRTC signaling
     socket.on("webrtc-offer", async ({ fromSocketId, offer }) => {
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       peers.current[fromSocketId] = pc;
 
       localStream?.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
       pc.onicecandidate = (e) => {
         if (e.candidate) {
-          socket.emit("webrtc-ice-candidate", {
-            targetSocketId: fromSocketId,
-            candidate: e.candidate,
-          });
+          socket.emit("webrtc-ice-candidate", { targetSocketId: fromSocketId, candidate: e.candidate });
         }
       };
 
@@ -48,7 +45,6 @@ function Home() {
       await pc.setRemoteDescription(offer);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
       socket.emit("webrtc-answer", { targetSocketId: fromSocketId, answer });
     });
 
@@ -70,9 +66,7 @@ function Home() {
     users.forEach(async (id) => {
       if (id === socket.id) return;
 
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       peers.current[id] = pc;
 
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
@@ -95,32 +89,40 @@ function Home() {
   };
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif", maxWidth: "1000px", margin: "auto" }}>
-      <h2 style={{ textAlign: "center", marginBottom: "20px" }}>🎥 Screen Share App</h2>
+    <div style={containerStyle}>
+      <h2 style={{ textAlign: "center", marginBottom: "15px" }}>🎥 Screen Share App</h2>
 
-      <div style={{ display: "flex", justifyContent: "center", gap: "10px", marginBottom: "20px" }}>
+      {/* Status */}
+      <div style={statusStyle}>
+        <span>Room ID: <b>{roomId || "Not joined"}</b></span>
+        <span>Connected Users: <b>{connectedCount}</b></span>
+      </div>
+
+      {/* Room controls */}
+      <div style={controlStyle}>
         <button onClick={createRoom} style={buttonStyle}>Create Room</button>
         <input
+          placeholder="Enter Room ID"
           value={roomId}
           onChange={(e) => setRoomId(e.target.value)}
-          placeholder="Room ID"
           style={inputStyle}
         />
         <button onClick={joinRoom} style={buttonStyle}>Join Room</button>
         <button onClick={startScreenShare} style={buttonStyle}>Start Screen Share</button>
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "15px" }}>
-        <div style={{ textAlign: "center" }}>
-          <p>You</p>
+      {/* Videos */}
+      <div style={videoGridStyle}>
+        <div style={videoWrapperStyle}>
+          <p style={{ textAlign: "center" }}>You</p>
           <video ref={localVideoRef} autoPlay muted style={videoStyle} />
         </div>
 
         {users.map(
           (id) =>
             id !== socket.id && (
-              <div key={id} style={{ textAlign: "center" }}>
-                <p>{id}</p>
+              <div key={id} style={videoWrapperStyle}>
+                <p style={{ textAlign: "center" }}>{id.slice(0, 6)}</p>
                 <video id={`video-${id}`} autoPlay playsInline style={videoStyle} />
               </div>
             )
@@ -131,29 +133,13 @@ function Home() {
 }
 
 // --- Styles ---
-const buttonStyle = {
-  padding: "8px 16px",
-  borderRadius: "5px",
-  border: "none",
-  backgroundColor: "#101727",
-  color: "white",
-  cursor: "pointer",
-  fontWeight: "bold",
-};
-
-const inputStyle = {
-  padding: "8px",
-  borderRadius: "5px",
-  border: "1px solid #ccc",
-  minWidth: "120px",
-};
-
-const videoStyle = {
-  width: "300px",
-  height: "200px",
-  border: "2px solid #101727",
-  borderRadius: "5px",
-  objectFit: "cover",
-};
+const containerStyle = { padding: "20px", fontFamily: "Arial, sans-serif", maxWidth: "1000px", margin: "auto" };
+const statusStyle = { display: "flex", justifyContent: "space-between", marginBottom: "15px", fontSize: "14px" };
+const controlStyle = { display: "flex", justifyContent: "center", gap: "10px", marginBottom: "20px", flexWrap: "wrap" };
+const buttonStyle = { padding: "8px 16px", borderRadius: "5px", border: "none", backgroundColor: "#101727", color: "white", cursor: "pointer", fontWeight: "bold" };
+const inputStyle = { padding: "8px", borderRadius: "5px", border: "1px solid #ccc", minWidth: "140px" };
+const videoGridStyle = { display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "15px" };
+const videoWrapperStyle = { textAlign: "center" };
+const videoStyle = { width: "300px", height: "200px", border: "2px solid #101727", borderRadius: "5px", objectFit: "cover" };
 
 export default Home;
