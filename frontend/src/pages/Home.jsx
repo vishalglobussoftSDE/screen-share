@@ -8,14 +8,9 @@ function Home() {
   const peers = useRef({});
   let localStream;
 
-  // --- Join or create room
-  const createRoom = () => {
-    socket.emit("create-room");
-  };
-
-  const joinRoom = () => {
-    if (roomId) socket.emit("join-room", roomId);
-  };
+  // Create or join room
+  const createRoom = () => socket.emit("create-room");
+  const joinRoom = () => roomId && socket.emit("join-room", roomId);
 
   useEffect(() => {
     socket.on("room-created", (id) => {
@@ -100,22 +95,65 @@ function Home() {
   };
 
   return (
-    <div>
-      <h2>Screen Share</h2>
-      <button onClick={createRoom}>Create Room</button>
-      <input value={roomId} onChange={(e) => setRoomId(e.target.value)} placeholder="Room ID" />
-      <button onClick={joinRoom}>Join Room</button>
-      <button onClick={startScreenShare}>Start Screen Share</button>
+    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif", maxWidth: "1000px", margin: "auto" }}>
+      <h2 style={{ textAlign: "center", marginBottom: "20px" }}>🎥 Screen Share App</h2>
 
-      <video ref={localVideoRef} autoPlay muted style={{ width: "400px", border: "2px solid green" }} />
-      {users.map(
-        (id) =>
-          id !== socket.id && (
-            <video key={id} id={`video-${id}`} autoPlay playsInline style={{ width: "400px", border: "1px solid black", margin: "10px" }} />
-          )
-      )}
+      <div style={{ display: "flex", justifyContent: "center", gap: "10px", marginBottom: "20px" }}>
+        <button onClick={createRoom} style={buttonStyle}>Create Room</button>
+        <input
+          value={roomId}
+          onChange={(e) => setRoomId(e.target.value)}
+          placeholder="Room ID"
+          style={inputStyle}
+        />
+        <button onClick={joinRoom} style={buttonStyle}>Join Room</button>
+        <button onClick={startScreenShare} style={buttonStyle}>Start Screen Share</button>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "15px" }}>
+        <div style={{ textAlign: "center" }}>
+          <p>You</p>
+          <video ref={localVideoRef} autoPlay muted style={videoStyle} />
+        </div>
+
+        {users.map(
+          (id) =>
+            id !== socket.id && (
+              <div key={id} style={{ textAlign: "center" }}>
+                <p>{id}</p>
+                <video id={`video-${id}`} autoPlay playsInline style={videoStyle} />
+              </div>
+            )
+        )}
+      </div>
     </div>
   );
 }
+
+// --- Styles ---
+const buttonStyle = {
+  padding: "8px 16px",
+  borderRadius: "5px",
+  border: "none",
+  backgroundColor: "#101727",
+  color: "white",
+  cursor: "pointer",
+  fontWeight: "bold",
+};
+
+const inputStyle = {
+  padding: "8px",
+  borderRadius: "5px",
+  border: "1px solid #ccc",
+  minWidth: "120px",
+};
+
+const videoStyle = {
+  width: "300px",
+  height: "200px",
+  border: "2px solid #101727",
+  borderRadius: "5px",
+  objectFit: "cover",
+};
 
 export default Home;
