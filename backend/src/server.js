@@ -15,8 +15,13 @@ app.get("/health", (req, res) => {
 
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: "*" },
+  cors: {
+    origin: "*", // allow all frontend origins
+    methods: ["GET", "POST"],
+  },
+  transports: ["websocket"], // force WebSocket for HTTPS
 });
+
 
 // --- Socket.IO signaling ---
 const rooms = {};
