@@ -48,7 +48,13 @@ io.on("connection", (socket) => {
     users.set(userId, socket.id);
     socket.join(roomId);
 
-    io.to(roomId).emit("room-users", Array.from(users.keys()));
+    io.to(roomId).emit(
+      "room-users",
+      Array.from(users.entries()).map(([userId, socketId]) => ({
+        userId,
+        socketId,
+      }))
+    );
     console.log(`👥 ${userId} joined room ${roomId}`);
   });
 
