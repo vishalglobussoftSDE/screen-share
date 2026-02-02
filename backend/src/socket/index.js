@@ -16,23 +16,34 @@ export default function registerSockets(io) {
       console.log(`📦 Room created: ${roomId}`);
     });
 
-    // 🔹 Join an existing room
-    socket.on("join-room", (roomId) => {
+    // rooms: Map<roomId, Map<userId, socketId>>
+    socket.on("join-room", ({ roomId, userId }) => {
+
       if (!rooms.has(roomId)) {
         socket.emit("error", "Room does not exist");
         return;
       }
 
-      rooms.get(roomId).add(socket.id);
+      const roomUsers = rooms.get(roomId);
+
+      // 🚫 user already joined
+      if (roomUsers.has(userId)) {
+        socket.emit("already-joined");
+        return;
+      }
+
+      // ✅ first time join
+      roomUsers.set(userId, socket.id);
       socket.join(roomId);
 
       io.to(roomId).emit(
         "room-users",
-        Array.from(rooms.get(roomId))
+        Array.from(roomUsers.keys()) // send userIds, not sockets
       );
 
-      console.log(`👥 ${socket.id} joined room ${roomId}`);
+      console.log(`👥 User ${userId} joined room ${roomId}`);
     });
+
 
     // 🔹 Handle disconnect
     socket.on("disconnect", () => {
