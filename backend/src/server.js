@@ -1,3 +1,4 @@
+// backend/src/server.js
 import http from "http";
 import express from "express";
 import cors from "cors";
@@ -7,9 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("Backend is running 🚀");
-});
+app.get("/", (req, res) => res.send("Backend is running 🚀"));
 
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
@@ -19,12 +18,7 @@ const io = new Server(server, {
   transports: ["websocket"],
 });
 
-/*
-rooms = Map<
-  roomId,
-  Map<userId, socketId>
->
-*/
+// rooms: Map<roomId, Map<userId, socketId>>
 const rooms = new Map();
 
 io.on("connection", (socket) => {
@@ -46,7 +40,6 @@ io.on("connection", (socket) => {
     }
 
     const users = rooms.get(roomId);
-
     if (users.has(userId)) {
       socket.emit("already-joined");
       return;
@@ -56,7 +49,6 @@ io.on("connection", (socket) => {
     socket.join(roomId);
 
     io.to(roomId).emit("room-users", Array.from(users.keys()));
-
     console.log(`👥 ${userId} joined room ${roomId}`);
   });
 
@@ -90,7 +82,6 @@ io.on("connection", (socket) => {
           users.delete(userId);
           io.to(roomId).emit("room-users", Array.from(users.keys()));
           console.log(`❌ ${userId} left room ${roomId}`);
-
           if (users.size === 0) {
             rooms.delete(roomId);
             console.log(`🧹 Room deleted: ${roomId}`);
@@ -98,7 +89,6 @@ io.on("connection", (socket) => {
         }
       }
     }
-
     console.log("🔴 Disconnected:", socket.id);
   });
 });
