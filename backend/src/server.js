@@ -91,6 +91,22 @@ io.on("connection", (socket) => {
     }
     console.log("🔴 Disconnected:", socket.id);
   });
+  // -------- LEAVE ROOM --------
+  socket.on("leave-room", ({ roomId, userId }) => {
+    if (!rooms.has(roomId)) return;
+    const users = rooms.get(roomId);
+    if (users.has(userId)) {
+      users.delete(userId);
+      socket.leave(roomId);
+      io.to(roomId).emit("room-users", Array.from(users.keys()));
+      console.log(`❌ ${userId} left room ${roomId}`);
+      if (users.size === 0) {
+        rooms.delete(roomId);
+        console.log(`🧹 Room deleted: ${roomId}`);
+      }
+    }
+  });
+
 });
 
 server.listen(PORT, "0.0.0.0", () => {

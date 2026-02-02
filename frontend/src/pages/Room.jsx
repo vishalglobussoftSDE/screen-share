@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import socket from "../services/socket";
 
 function Room() {
   const { roomId } = useParams();
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const localVideoRef = useRef(null);
   const peers = useRef({});
@@ -11,6 +12,7 @@ function Room() {
   const userId = useRef(Math.random().toString(36).substring(2, 8));
 
   useEffect(() => {
+    // Join room on load
     socket.emit("join-room", { roomId, userId: userId.current });
 
     socket.on("room-users", (ids) => setUsers(ids));
@@ -24,7 +26,7 @@ function Room() {
       const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       peers.current[fromSocketId] = pc;
 
-      localVideoRef.current.srcObject?.getTracks().forEach((track) => pc.addTrack(track, localVideoRef.current.srcObject));
+      localVideoRef.current?.srcObject?.getTracks().forEach((track) => pc.addTrack(track, localVideoRef.current.srcObject));
 
       pc.onicecandidate = (e) => e.candidate && socket.emit("webrtc-ice-candidate", { targetSocketId: fromSocketId, candidate: e.candidate });
       pc.ontrack = (e) => {
@@ -47,7 +49,11 @@ function Room() {
       peers.current[fromSocketId]?.addIceCandidate(candidate);
     });
 
-    return () => socket.off();
+    return () => {
+      // Cleanup on unmount
+      stopScreenShare();
+      socket.off();
+    };
   }, [roomId]);
 
   const startScreenShare = async () => {
@@ -76,11 +82,33 @@ function Room() {
     });
   };
 
+  const stopScreenShare = () => {
+    if (localVideoRef.current?.srcObject) {
+      localVideoRef.current.srcObject.getTracks().forEach((track) => track.stop());
+      localVideoRef.current.srcObject = null;
+      setSharing(false);
+    }
+
+    // Close all peer connections
+    Object.values(peers.current).forEach((pc) => pc.close());
+    peers.current = {};
+  };
+
+  const leaveRoom = () => {
+    stopScreenShare();
+    socket.emit("leave-room", { roomId, userId: userId.current });
+    navigate("/"); // back to Landing
+  };
+
   return (
     <div style={{ textAlign: "center", marginTop: "20px" }}>
       <h2>Room: {roomId}</h2>
       <p>Connected Users: {users.length}</p>
-      <button onClick={startScreenShare} disabled={sharing} style={buttonStyle}>Start Screen Share</button>
+
+      <div>
+        <button onClick={startScreenShare} disabled={sharing} style={buttonStyleShare}>Start Screen Share</button>
+        <button onClick={leaveRoom} style={buttonStyleLeave}>Leave Room</button>
+      </div>
 
       <div style={videoGridStyle}>
         <div style={videoWrapperStyle}>
@@ -100,12 +128,23 @@ function Room() {
   );
 }
 
-const buttonStyle = {
+const buttonStyleShare = {
   padding: "10px 20px",
   margin: "10px",
   borderRadius: "5px",
   border: "none",
   backgroundColor: "#101727",
+  color: "white",
+  fontWeight: "bold",
+  cursor: "pointer",
+};
+
+const buttonStyleLeave = {
+  padding: "10px 20px",
+  margin: "10px",
+  borderRadius: "5px",
+  border: "none",
+  backgroundColor: "red",
   color: "white",
   fontWeight: "bold",
   cursor: "pointer",
