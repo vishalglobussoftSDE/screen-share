@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "https://screenshareglobussoft.up.railway.app", // backend LAN IP
+  baseURL: import.meta.env.VITE_API_URL,
   timeout: 5000,
 });
 

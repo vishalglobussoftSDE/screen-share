@@ -7,18 +7,14 @@ function Home() {
   const [connectedCount, setConnectedCount] = useState(0);
   const localVideoRef = useRef(null);
   const peers = useRef({});
+  const [sharing, setSharing] = useState(false);
   let localStream;
 
-  // --- Room actions
   const createRoom = () => socket.emit("create-room");
   const joinRoom = () => roomId && socket.emit("join-room", roomId);
 
   useEffect(() => {
-    // Room events
-    socket.on("room-created", (id) => {
-      setRoomId(id);
-    });
-
+    socket.on("room-created", (id) => setRoomId(id));
     socket.on("room-users", (ids) => {
       setUsers(ids);
       setConnectedCount(ids.length);
@@ -26,17 +22,14 @@ function Home() {
 
     // WebRTC signaling
     socket.on("webrtc-offer", async ({ fromSocketId, offer }) => {
+      if (peers.current[fromSocketId]) return; // prevent duplicates
+
       const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       peers.current[fromSocketId] = pc;
 
       localStream?.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit("webrtc-ice-candidate", { targetSocketId: fromSocketId, candidate: e.candidate });
-        }
-      };
-
+      pc.onicecandidate = (e) => e.candidate && socket.emit("webrtc-ice-candidate", { targetSocketId: fromSocketId, candidate: e.candidate });
       pc.ontrack = (e) => {
         const video = document.getElementById(`video-${fromSocketId}`);
         if (video) video.srcObject = e.streams[0];
@@ -45,38 +38,36 @@ function Home() {
       await pc.setRemoteDescription(offer);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+
       socket.emit("webrtc-answer", { targetSocketId: fromSocketId, answer });
     });
 
     socket.on("webrtc-answer", ({ fromSocketId, answer }) => {
-      peers.current[fromSocketId].setRemoteDescription(answer);
+      peers.current[fromSocketId]?.setRemoteDescription(answer);
     });
 
     socket.on("webrtc-ice-candidate", ({ fromSocketId, candidate }) => {
-      peers.current[fromSocketId].addIceCandidate(candidate);
+      peers.current[fromSocketId]?.addIceCandidate(candidate);
     });
 
     return () => socket.off();
   }, [localStream]);
 
   const startScreenShare = async () => {
+    if (sharing) return; // prevent multiple streams
     localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     localVideoRef.current.srcObject = localStream;
+    setSharing(true);
 
     users.forEach(async (id) => {
-      if (id === socket.id) return;
+      if (id === socket.id || peers.current[id]) return; // prevent duplicate peers
 
       const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       peers.current[id] = pc;
 
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit("webrtc-ice-candidate", { targetSocketId: id, candidate: e.candidate });
-        }
-      };
-
+      pc.onicecandidate = (e) => e.candidate && socket.emit("webrtc-ice-candidate", { targetSocketId: id, candidate: e.candidate });
       pc.ontrack = (e) => {
         const video = document.getElementById(`video-${id}`);
         if (video) video.srcObject = e.streams[0];
@@ -98,17 +89,12 @@ function Home() {
         <span>Connected Users: <b>{connectedCount}</b></span>
       </div>
 
-      {/* Room controls */}
+      {/* Controls */}
       <div style={controlStyle}>
         <button onClick={createRoom} style={buttonStyle}>Create Room</button>
-        <input
-          placeholder="Enter Room ID"
-          value={roomId}
-          onChange={(e) => setRoomId(e.target.value)}
-          style={inputStyle}
-        />
+        <input placeholder="Enter Room ID" value={roomId} onChange={(e) => setRoomId(e.target.value)} style={inputStyle} />
         <button onClick={joinRoom} style={buttonStyle}>Join Room</button>
-        <button onClick={startScreenShare} style={buttonStyle}>Start Screen Share</button>
+        <button onClick={startScreenShare} style={buttonStyle} disabled={sharing}>Start Screen Share</button>
       </div>
 
       {/* Videos */}

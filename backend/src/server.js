@@ -4,26 +4,22 @@ import express from "express";
 import cors from "cors";
 
 const app = express();
-app.use(cors()); // Allow LAN access
+app.use(cors());
 app.use(express.json());
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 app.get("/health", (req, res) => {
   res.json({ message: "Backend is healthy ✅" });
 });
 
 const httpServer = http.createServer(app);
+
 const io = new Server(httpServer, {
-  cors: {
-    origin: "*", // allow all frontend origins
-    methods: ["GET", "POST"],
-  },
-  transports: ["websocket"], // force WebSocket for HTTPS
+  cors: { origin: "*" },
+  transports: ["websocket"], // ensures WSS works on deployed HTTPS frontend
 });
 
-
-// --- Socket.IO signaling ---
 const rooms = {};
 
 io.on("connection", (socket) => {
@@ -40,10 +36,12 @@ io.on("connection", (socket) => {
 
   socket.on("join-room", (roomId) => {
     if (!rooms[roomId]) rooms[roomId] = [];
-    rooms[roomId].push(socket.id);
-    socket.join(roomId);
-    io.to(roomId).emit("room-users", rooms[roomId]);
-    console.log(`👥 ${socket.id} joined room ${roomId}`);
+    if (!rooms[roomId].includes(socket.id)) {
+      rooms[roomId].push(socket.id);
+      socket.join(roomId);
+      io.to(roomId).emit("room-users", rooms[roomId]);
+      console.log(`👥 ${socket.id} joined room ${roomId}`);
+    }
   });
 
   socket.on("webrtc-offer", ({ targetSocketId, offer }) => {
