@@ -5,48 +5,70 @@ import socket from "../services/socket";
 function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
-
-  // users = [{ userId, socketId }]
   const [users, setUsers] = useState([]);
+  const localVideoRef = useRef(null);
+  const peers = useRef({});
   const [sharing, setSharing] = useState(false);
 
-  const localVideoRef = useRef(null);
-  const peers = useRef({}); // socketId -> RTCPeerConnection
-
-  // persistent userId (same browser = same user)
+  // Persist userId across reloads
   const savedId = localStorage.getItem("userId");
   const userId = useRef(savedId || Math.random().toString(36).substring(2, 8));
-  useEffect(() => {
-    localStorage.setItem("userId", userId.current);
-  }, []);
+  useEffect(() => localStorage.setItem("userId", userId.current), []);
 
-  /* ---------------- JOIN ROOM ---------------- */
   useEffect(() => {
+    // Join room
     socket.emit("join-room", { roomId, userId: userId.current });
 
-    socket.on("room-users", (list) => {
-      setUsers(list);
+    // Update users list
+    socket.on("room-users", async (ids) => {
+      setUsers(ids);
+
+      // Handle late joiners: create peer connection for each user not already connected
+      ids.forEach(async (id) => {
+        if (id === userId.current || peers.current[id]) return;
+
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+        peers.current[id] = pc;
+
+        pc.onicecandidate = (e) => e.candidate && socket.emit("webrtc-ice-candidate", { targetSocketId: id, candidate: e.candidate });
+        pc.ontrack = (e) => {
+          const video = document.getElementById(`video-${id}`);
+          if (video) video.srcObject = e.streams[0];
+        };
+
+        // If local is sharing, add tracks
+        if (localVideoRef.current?.srcObject) {
+          localVideoRef.current.srcObject.getTracks().forEach(track => pc.addTrack(track, localVideoRef.current.srcObject));
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit("webrtc-offer", { targetSocketId: id, offer });
+        }
+      });
     });
 
-    socket.on("already-joined", () => alert("Already joined"));
+    socket.on("already-joined", () => alert("You are already in the room"));
     socket.on("error", (msg) => alert(msg));
 
-    /* --------- WEBRTC SIGNALING --------- */
-
+    // WebRTC signaling
     socket.on("webrtc-offer", async ({ fromSocketId, offer }) => {
       if (peers.current[fromSocketId]) return;
 
-      const pc = createPeer(fromSocketId);
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       peers.current[fromSocketId] = pc;
+
+      localVideoRef.current?.srcObject?.getTracks().forEach(track => pc.addTrack(track, localVideoRef.current.srcObject));
+
+      pc.onicecandidate = (e) => e.candidate && socket.emit("webrtc-ice-candidate", { targetSocketId: fromSocketId, candidate: e.candidate });
+      pc.ontrack = (e) => {
+        const video = document.getElementById(`video-${fromSocketId}`);
+        if (video) video.srcObject = e.streams[0];
+      };
 
       await pc.setRemoteDescription(offer);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      socket.emit("webrtc-answer", {
-        targetSocketId: fromSocketId,
-        answer,
-      });
+      socket.emit("webrtc-answer", { targetSocketId: fromSocketId, answer });
     });
 
     socket.on("webrtc-answer", ({ fromSocketId, answer }) => {
@@ -63,149 +85,108 @@ function Room() {
     };
   }, [roomId]);
 
-  /* ---------------- PEER HELPER ---------------- */
-  const createPeer = (targetSocketId) => {
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-
-    pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        socket.emit("webrtc-ice-candidate", {
-          targetSocketId,
-          candidate: e.candidate,
-        });
-      }
-    };
-
-    pc.ontrack = (e) => {
-      const video = document.getElementById(`video-${targetSocketId}`);
-      if (video) video.srcObject = e.streams[0];
-    };
-
-    if (localVideoRef.current?.srcObject) {
-      localVideoRef.current.srcObject
-        .getTracks()
-        .forEach((t) => pc.addTrack(t, localVideoRef.current.srcObject));
-    }
-
-    return pc;
-  };
-
-  /* ---------------- START SHARE ---------------- */
   const startScreenShare = async () => {
     if (sharing) return;
 
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: false,
-    });
-
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     localVideoRef.current.srcObject = stream;
     setSharing(true);
 
-    // create offers to all others
-    users.forEach(async ({ userId: uid, socketId }) => {
-      if (uid === userId.current || peers.current[socketId]) return;
+    // Create offers to all existing users
+    users.forEach(async (id) => {
+      if (id === userId.current || peers.current[id]) return;
 
-      const pc = createPeer(socketId);
-      peers.current[socketId] = pc;
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      peers.current[id] = pc;
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      pc.onicecandidate = (e) => e.candidate && socket.emit("webrtc-ice-candidate", { targetSocketId: id, candidate: e.candidate });
+      pc.ontrack = (e) => {
+        const video = document.getElementById(`video-${id}`);
+        if (video) video.srcObject = e.streams[0];
+      };
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-
-      socket.emit("webrtc-offer", {
-        targetSocketId: socketId,
-        offer,
-      });
+      socket.emit("webrtc-offer", { targetSocketId: id, offer });
     });
   };
 
-  /* ---------------- LEAVE ROOM ---------------- */
-  const leaveRoomCleanup = () => {
-    Object.values(peers.current).forEach((pc) => pc.close());
-    peers.current = {};
-
+  const stopScreenShare = () => {
     if (localVideoRef.current?.srcObject) {
-      localVideoRef.current.srcObject.getTracks().forEach((t) => t.stop());
+      localVideoRef.current.srcObject.getTracks().forEach(track => track.stop());
       localVideoRef.current.srcObject = null;
+      setSharing(false);
     }
 
+    Object.values(peers.current).forEach(pc => pc.close());
+    peers.current = {};
+  };
+
+  const leaveRoomCleanup = () => {
+    stopScreenShare();
     socket.emit("leave-room", { roomId, userId: userId.current });
   };
 
   const leaveRoom = () => {
     leaveRoomCleanup();
-    navigate("/");
+    navigate("/"); // back to landing
   };
 
-  /* ---------------- UI ---------------- */
   return (
-    <div style={{ textAlign: "center", marginTop: 20 }}>
+    <div style={{ textAlign: "center", marginTop: "20px" }}>
       <h2>Room: {roomId}</h2>
       <p>Connected Users: {users.length}</p>
 
       <div>
-        <button onClick={startScreenShare} disabled={sharing} style={btn}>
-          Start Screen Share
-        </button>
-        <button onClick={leaveRoom} style={leaveBtn}>
-          Leave Room
-        </button>
+        <button onClick={startScreenShare} disabled={sharing} style={buttonStyleShare}>Start Screen Share</button>
+        <button onClick={leaveRoom} style={buttonStyleLeave}>Leave Room</button>
       </div>
 
-      <div style={grid}>
-        <div>
+      <div style={videoGridStyle}>
+        <div style={videoWrapperStyle}>
           <p>You</p>
-          <video ref={localVideoRef} autoPlay muted style={video} />
+          <video ref={localVideoRef} autoPlay muted style={videoStyle} />
         </div>
 
-        {users.map(
-          ({ userId: uid, socketId }) =>
-            uid !== userId.current && (
-              <div key={socketId}>
-                <p>{uid}</p>
-                <video
-                  id={`video-${socketId}`}
-                  autoPlay
-                  playsInline
-                  style={video}
-                />
-              </div>
-            )
+        {users.map((id) =>
+          id !== userId.current && (
+            <div key={id} style={videoWrapperStyle}>
+              <p>{id.slice(0, 6)}</p>
+              <video id={`video-${id}`} autoPlay playsInline style={videoStyle} />
+            </div>
+          )
         )}
       </div>
     </div>
   );
 }
 
-/* ---------------- STYLES ---------------- */
-const btn = {
+const buttonStyleShare = {
   padding: "10px 20px",
-  margin: 10,
-  background: "#101727",
-  color: "white",
+  margin: "10px",
+  borderRadius: "5px",
   border: "none",
-  borderRadius: 5,
+  backgroundColor: "#101727",
+  color: "white",
   fontWeight: "bold",
+  cursor: "pointer",
 };
 
-const leaveBtn = { ...btn, background: "red" };
-
-const grid = {
-  display: "flex",
-  flexWrap: "wrap",
-  justifyContent: "center",
-  gap: 15,
-  marginTop: 20,
+const buttonStyleLeave = {
+  padding: "10px 20px",
+  margin: "10px",
+  borderRadius: "5px",
+  border: "none",
+  backgroundColor: "red",
+  color: "white",
+  fontWeight: "bold",
+  cursor: "pointer",
 };
 
-const video = {
-  width: 300,
-  height: 200,
-  border: "2px solid #101727",
-  borderRadius: 5,
-  objectFit: "cover",
-};
+const videoGridStyle = { display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "15px", marginTop: "20px" };
+const videoWrapperStyle = { textAlign: "center" };
+const videoStyle = { width: "300px", height: "200px", border: "2px solid #101727", borderRadius: "5px", objectFit: "cover" };
 
 export default Room;
