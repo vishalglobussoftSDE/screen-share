@@ -6,6 +6,10 @@ function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
 
+  const recognitionRef = useRef(null);
+  const [listening, setListening] = useState(false);
+
+
   const [users, setUsers] = useState([]); // [{ userId, socketId }]
   const [sharing, setSharing] = useState(false);
 
@@ -23,6 +27,33 @@ function Room() {
 
   useEffect(() => {
     localStorage.setItem("userId", userId.current);
+  }, []);
+
+  //speechRecogition
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert("Speech Recognition not supported in this browser");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-IN"; // change to hi-IN for Hindi
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onresult = (event) => {
+      const spokenText = event.results[0][0].transcript;
+      setText(spokenText); // auto fill input
+    };
+
+    recognition.onend = () => {
+      setListening(false);
+    };
+
+    recognitionRef.current = recognition;
   }, []);
 
   /* ---------------- JOIN ROOM ---------------- */
@@ -174,6 +205,13 @@ function Room() {
 
     socket.emit("leave-room", { roomId, userId: userId.current });
   };
+  const startListening = () => {
+    if (!recognitionRef.current) return;
+
+    setListening(true);
+    recognitionRef.current.start();
+  };
+
 
   const leaveRoom = () => {
     leaveRoomCleanup();
@@ -241,6 +279,10 @@ function Room() {
           <button onClick={sendMessage} style={sendBtn}>
             Send
           </button>
+          <button onClick={startListening} style={btn}>
+            {listening ? "Listening... 🎧" : "Speak 🎙️"}
+          </button>
+
         </div>
       </div>
     </div>
