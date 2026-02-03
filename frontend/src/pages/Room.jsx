@@ -21,22 +21,19 @@ function Room() {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
 
-  /* ---------------- SAVE USER ---------------- */
   useEffect(() => {
     localStorage.setItem("userId", userId.current);
   }, []);
 
   /* ---------------- SPEECH TO TEXT ---------------- */
   useEffect(() => {
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
 
-    const rec = new SpeechRecognition();
+    const rec = new SR();
     rec.lang = "en-IN";
     rec.onresult = (e) => setText(e.results[0][0].transcript);
     rec.onend = () => setListening(false);
-
     recognitionRef.current = rec;
   }, []);
 
@@ -45,12 +42,12 @@ function Room() {
     socket.emit("join-room", { roomId, userId: userId.current });
 
     socket.on("room-users", setUsers);
-    socket.on("receive-message", ({ message, userId }) =>
-      setMessages((p) => [...p, { message, userId }])
-    );
+
+    socket.on("receive-message", ({ message, userId }) => {
+      setMessages((p) => [...p, { message, userId }]);
+    });
 
     socket.on("webrtc-offer", async ({ fromSocketId, offer }) => {
-      if (peers.current[fromSocketId]) return;
       const pc = createPeer(fromSocketId);
       peers.current[fromSocketId] = pc;
 
@@ -72,7 +69,7 @@ function Room() {
       peers.current[fromSocketId]?.addIceCandidate(candidate);
     });
 
-    return () => leaveRoomCleanup();
+    return () => leaveRoom();
   }, [roomId]);
 
   /* ---------------- PEER ---------------- */
@@ -92,16 +89,10 @@ function Room() {
 
     pc.ontrack = (e) => {
       const video = document.getElementById(`video-${socketId}`);
-      if (video) video.srcObject = e.streams[0];
-
-      let audio = document.getElementById(`audio-${socketId}`);
-      if (!audio) {
-        audio = document.createElement("audio");
-        audio.id = `audio-${socketId}`;
-        audio.autoplay = true;
-        document.body.appendChild(audio);
+      if (video) {
+        video.srcObject = e.streams[0];
+        video.play().catch(() => {});
       }
-      audio.srcObject = e.streams[0];
     };
 
     if (localVideoRef.current?.srcObject) {
@@ -113,45 +104,36 @@ function Room() {
     return pc;
   };
 
-  /* ---------------- SCREEN SHARE ---------------- */
-const startScreenShare = async () => {
-  if (sharing) return;
+  /* ---------------- START SHARE ---------------- */
+  const startScreenShare = async () => {
+    if (sharing) return;
 
-  // 🎥 SCREEN
-  const screenStream = await navigator.mediaDevices.getDisplayMedia({
-    video: true,
-  });
+    const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-  // 🎤 MIC
-  const micStream = await navigator.mediaDevices.getUserMedia({
-    audio: true,
-  });
+    const stream = new MediaStream([
+      ...screen.getVideoTracks(),
+      ...mic.getAudioTracks(),
+    ]);
 
-  // 🔗 MERGE SCREEN + MIC
-  const combinedStream = new MediaStream([
-    ...screenStream.getVideoTracks(),
-    ...micStream.getAudioTracks(),
-  ]);
+    localVideoRef.current.srcObject = stream;
+    setSharing(true);
 
-  localVideoRef.current.srcObject = combinedStream;
-  setSharing(true);
+    users.forEach(async ({ socketId, userId: uid }) => {
+      if (uid === userId.current) return;
 
-  users.forEach(async ({ userId: uid, socketId }) => {
-    if (uid === userId.current || peers.current[socketId]) return;
+      const pc = createPeer(socketId);
+      peers.current[socketId] = pc;
 
-    const pc = createPeer(socketId);
-    peers.current[socketId] = pc;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    socket.emit("webrtc-offer", {
-      targetSocketId: socketId,
-      offer,
+      socket.emit("webrtc-offer", {
+        targetSocketId: socketId,
+        offer,
+      });
     });
-  });
-};
-
+  };
 
   /* ---------------- MIC ---------------- */
   const toggleMic = () => {
@@ -164,6 +146,7 @@ const startScreenShare = async () => {
   /* ---------------- CHAT ---------------- */
   const sendMessage = () => {
     if (!text.trim()) return;
+
     setMessages((p) => [...p, { message: text, userId: "You" }]);
     socket.emit("send-message", {
       roomId,
@@ -179,25 +162,24 @@ const startScreenShare = async () => {
   };
 
   /* ---------------- LEAVE ---------------- */
-  const leaveRoomCleanup = () => {
+  const leaveRoom = () => {
     Object.values(peers.current).forEach((pc) => pc.close());
     peers.current = {};
     socket.emit("leave-room", { roomId, userId: userId.current });
+    navigate("/");
   };
 
+  /* ---------------- UI ---------------- */
   return (
     <div style={layout}>
-      {/* LEFT VIDEO */}
       <div style={left}>
         <h3>Room: {roomId}</h3>
 
-        <div>
-          <button onClick={startScreenShare} style={btn}>Share</button>
-          <button onClick={toggleMic} style={btn}>
-            {micOn ? "Mute 🔇" : "Unmute 🎙️"}
-          </button>
-          <button onClick={() => navigate("/")} style={leaveBtn}>Leave</button>
-        </div>
+        <button onClick={startScreenShare} style={btn}>Share</button>
+        <button onClick={toggleMic} style={btn}>
+          {micOn ? "Mute 🔇" : "Unmute 🎙️"}
+        </button>
+        <button onClick={leaveRoom} style={leaveBtn}>Leave</button>
 
         <video ref={localVideoRef} autoPlay muted style={video} />
 
@@ -217,15 +199,12 @@ const startScreenShare = async () => {
         </div>
       </div>
 
-      {/* RIGHT CHAT */}
       <div style={right}>
         <h3>Chat</h3>
 
         <div style={chatMessages}>
           {messages.map((m, i) => (
-            <div key={i}>
-              <b>{m.userId}:</b> {m.message}
-            </div>
+            <div key={i}><b>{m.userId}:</b> {m.message}</div>
           ))}
         </div>
 
@@ -236,12 +215,10 @@ const startScreenShare = async () => {
           style={chatInput}
         />
 
-        <div>
-          <button onClick={sendMessage} style={btn}>Send</button>
-          <button onClick={startListening} style={btn}>
-            {listening ? "Listening..." : "🎙️ Speak"}
-          </button>
-        </div>
+        <button onClick={sendMessage} style={btn}>Send</button>
+        <button onClick={startListening} style={btn}>
+          {listening ? "Listening..." : "🎙️ Speak"}
+        </button>
       </div>
     </div>
   );
@@ -251,13 +228,10 @@ const startScreenShare = async () => {
 const layout = { display: "flex", height: "100vh" };
 const left = { flex: 3, padding: 10 };
 const right = { flex: 1, borderLeft: "2px solid #101727", padding: 10 };
-
 const btn = { margin: 5, padding: "8px 12px", background: "#101727", color: "#fff", border: "none" };
 const leaveBtn = { ...btn, background: "red" };
-
 const video = { width: 300, height: 200, border: "2px solid #101727", margin: 5 };
 const grid = { display: "flex", flexWrap: "wrap" };
-
 const chatMessages = { height: 300, overflowY: "auto", border: "1px solid #ccc", padding: 5 };
 const chatInput = { width: "100%", padding: 5 };
 
