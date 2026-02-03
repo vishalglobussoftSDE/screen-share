@@ -114,29 +114,44 @@ function Room() {
   };
 
   /* ---------------- SCREEN SHARE ---------------- */
-  const startScreenShare = async () => {
-    if (sharing) return;
+const startScreenShare = async () => {
+  if (sharing) return;
 
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: true,
+  // 🎥 SCREEN
+  const screenStream = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+  });
+
+  // 🎤 MIC
+  const micStream = await navigator.mediaDevices.getUserMedia({
+    audio: true,
+  });
+
+  // 🔗 MERGE SCREEN + MIC
+  const combinedStream = new MediaStream([
+    ...screenStream.getVideoTracks(),
+    ...micStream.getAudioTracks(),
+  ]);
+
+  localVideoRef.current.srcObject = combinedStream;
+  setSharing(true);
+
+  users.forEach(async ({ userId: uid, socketId }) => {
+    if (uid === userId.current || peers.current[socketId]) return;
+
+    const pc = createPeer(socketId);
+    peers.current[socketId] = pc;
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    socket.emit("webrtc-offer", {
+      targetSocketId: socketId,
+      offer,
     });
+  });
+};
 
-    localVideoRef.current.srcObject = stream;
-    setSharing(true);
-
-    users.forEach(async ({ socketId, userId: uid }) => {
-      if (uid === userId.current || peers.current[socketId]) return;
-
-      const pc = createPeer(socketId);
-      peers.current[socketId] = pc;
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      socket.emit("webrtc-offer", { targetSocketId: socketId, offer });
-    });
-  };
 
   /* ---------------- MIC ---------------- */
   const toggleMic = () => {
