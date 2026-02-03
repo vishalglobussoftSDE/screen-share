@@ -20,6 +20,19 @@ const io = new Server(server, {
 // rooms: Map<roomId, Map<userId, socketId>>
 const rooms = new Map();
 
+const emitRoomUsers = (roomId) => {
+  const users = rooms.get(roomId);
+  if (!users) return;
+
+  io.to(roomId).emit(
+    "room-users",
+    Array.from(users.entries()).map(([userId, socketId]) => ({
+      userId,
+      socketId,
+    }))
+  );
+};
+
 io.on("connection", (socket) => {
   console.log("🟢 Connected:", socket.id);
 
@@ -34,7 +47,7 @@ io.on("connection", (socket) => {
   /* -------- JOIN ROOM -------- */
   socket.on("join-room", ({ roomId, userId }) => {
     if (!rooms.has(roomId)) {
-      socket.emit("error", "Room does not exist");
+      socket.emit("room-error", "Room does not exist");
       return;
     }
 
@@ -47,13 +60,7 @@ io.on("connection", (socket) => {
     users.set(userId, socket.id);
     socket.join(roomId);
 
-    io.to(roomId).emit(
-      "room-users",
-      Array.from(users.entries()).map(([userId, socketId]) => ({
-        userId,
-        socketId,
-      }))
-    );
+    emitRoomUsers(roomId);
     console.log(`👥 ${userId} joined room ${roomId}`);
   });
 
@@ -79,44 +86,45 @@ io.on("connection", (socket) => {
     });
   });
 
+  /* -------- CHAT -------- */
   socket.on("send-message", ({ roomId, message, userId }) => {
-  socket.to(roomId).emit("receive-message", { message, userId });
-});
+    socket.to(roomId).emit("receive-message", { message, userId });
+  });
 
+  /* -------- LEAVE ROOM (manual) -------- */
+  socket.on("leave-room", ({ roomId, userId }) => {
+    removeUserFromRoom(roomId, userId);
+  });
 
   /* -------- DISCONNECT -------- */
   socket.on("disconnect", () => {
     for (const [roomId, users] of rooms.entries()) {
       for (const [userId, socketId] of users.entries()) {
         if (socketId === socket.id) {
-          users.delete(userId);
-          io.to(roomId).emit("room-users", Array.from(users.keys()));
-          console.log(`❌ ${userId} left room ${roomId}`);
-          if (users.size === 0) {
-            rooms.delete(roomId);
-            console.log(`🧹 Room deleted: ${roomId}`);
-          }
+          removeUserFromRoom(roomId, userId);
+          break;
         }
       }
     }
     console.log("🔴 Disconnected:", socket.id);
   });
-  // -------- LEAVE ROOM --------
-  socket.on("leave-room", ({ roomId, userId }) => {
-    if (!rooms.has(roomId)) return;
-    const users = rooms.get(roomId);
-    if (users.has(userId)) {
-      users.delete(userId);
-      socket.leave(roomId);
-      io.to(roomId).emit("room-users", Array.from(users.keys()));
-      console.log(`❌ ${userId} left room ${roomId}`);
-      if (users.size === 0) {
-        rooms.delete(roomId);
-        console.log(`🧹 Room deleted: ${roomId}`);
-      }
-    }
-  });
 
+  const removeUserFromRoom = (roomId, userId) => {
+    if (!rooms.has(roomId)) return;
+
+    const users = rooms.get(roomId);
+    users.delete(userId);
+    socket.leave(roomId);
+
+    if (users.size === 0) {
+      rooms.delete(roomId);
+      console.log(`🧹 Room deleted: ${roomId}`);
+    } else {
+      emitRoomUsers(roomId);
+    }
+
+    console.log(`❌ ${userId} left room ${roomId}`);
+  };
 });
 
 server.listen(PORT, "0.0.0.0", () => {

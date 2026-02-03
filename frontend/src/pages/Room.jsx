@@ -6,71 +6,51 @@ function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
 
-  const recognitionRef = useRef(null);
-  const [listening, setListening] = useState(false);
-
-
-  const [users, setUsers] = useState([]); // [{ userId, socketId }]
-  const [sharing, setSharing] = useState(false);
-
   const localVideoRef = useRef(null);
-  const peers = useRef({}); // socketId -> RTCPeerConnection
+  const peers = useRef({});
+  const recognitionRef = useRef(null);
 
-  // persistent userId
   const savedId = localStorage.getItem("userId");
   const userId = useRef(savedId || Math.random().toString(36).substring(2, 8));
 
-  const [messages, setMessages] = useState([]);
-  const [text, setText] = useState("");
+  const [users, setUsers] = useState([]);
+  const [sharing, setSharing] = useState(false);
   const [micOn, setMicOn] = useState(true);
 
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
+  const [listening, setListening] = useState(false);
 
+  /* ---------------- SAVE USER ---------------- */
   useEffect(() => {
     localStorage.setItem("userId", userId.current);
   }, []);
 
-  //speechRecogition
+  /* ---------------- SPEECH TO TEXT ---------------- */
   useEffect(() => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
 
-    if (!SpeechRecognition) {
-      alert("Speech Recognition not supported in this browser");
-      return;
-    }
+    const rec = new SpeechRecognition();
+    rec.lang = "en-IN";
+    rec.onresult = (e) => setText(e.results[0][0].transcript);
+    rec.onend = () => setListening(false);
 
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-IN"; // change to hi-IN for Hindi
-    recognition.continuous = false;
-    recognition.interimResults = false;
-
-    recognition.onresult = (event) => {
-      const spokenText = event.results[0][0].transcript;
-      setText(spokenText); // auto fill input
-    };
-
-    recognition.onend = () => {
-      setListening(false);
-    };
-
-    recognitionRef.current = recognition;
+    recognitionRef.current = rec;
   }, []);
 
   /* ---------------- JOIN ROOM ---------------- */
   useEffect(() => {
     socket.emit("join-room", { roomId, userId: userId.current });
 
-    socket.on("room-users", (list) => {
-      setUsers(list);
-    });
+    socket.on("room-users", setUsers);
+    socket.on("receive-message", ({ message, userId }) =>
+      setMessages((p) => [...p, { message, userId }])
+    );
 
-    socket.on("already-joined", () => alert("Already joined"));
-    socket.on("error", (msg) => alert(msg));
-
-    /* -------- WEBRTC -------- */
     socket.on("webrtc-offer", async ({ fromSocketId, offer }) => {
       if (peers.current[fromSocketId]) return;
-
       const pc = createPeer(fromSocketId);
       peers.current[fromSocketId] = pc;
 
@@ -92,19 +72,11 @@ function Room() {
       peers.current[fromSocketId]?.addIceCandidate(candidate);
     });
 
-    /* -------- CHAT -------- */
-    socket.on("receive-message", ({ message, userId }) => {
-      setMessages((prev) => [...prev, { message, userId }]);
-    });
-
-    return () => {
-      leaveRoomCleanup();
-      socket.off();
-    };
+    return () => leaveRoomCleanup();
   }, [roomId]);
 
   /* ---------------- PEER ---------------- */
-  const createPeer = (targetSocketId) => {
+  const createPeer = (socketId) => {
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -112,23 +84,30 @@ function Room() {
     pc.onicecandidate = (e) => {
       if (e.candidate) {
         socket.emit("webrtc-ice-candidate", {
-          targetSocketId,
+          targetSocketId: socketId,
           candidate: e.candidate,
         });
       }
     };
 
     pc.ontrack = (e) => {
-      const video = document.getElementById(`video-${targetSocketId}`);
+      const video = document.getElementById(`video-${socketId}`);
       if (video) video.srcObject = e.streams[0];
+
+      let audio = document.getElementById(`audio-${socketId}`);
+      if (!audio) {
+        audio = document.createElement("audio");
+        audio.id = `audio-${socketId}`;
+        audio.autoplay = true;
+        document.body.appendChild(audio);
+      }
+      audio.srcObject = e.streams[0];
     };
 
     if (localVideoRef.current?.srcObject) {
       localVideoRef.current.srcObject
         .getTracks()
-        .forEach((t) =>
-          pc.addTrack(t, localVideoRef.current.srcObject)
-        );
+        .forEach((t) => pc.addTrack(t, localVideoRef.current.srcObject));
     }
 
     return pc;
@@ -146,7 +125,7 @@ function Room() {
     localVideoRef.current.srcObject = stream;
     setSharing(true);
 
-    users.forEach(async ({ userId: uid, socketId }) => {
+    users.forEach(async ({ socketId, userId: uid }) => {
       if (uid === userId.current || peers.current[socketId]) return;
 
       const pc = createPeer(socketId);
@@ -155,111 +134,78 @@ function Room() {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      socket.emit("webrtc-offer", {
-        targetSocketId: socketId,
-        offer,
-      });
+      socket.emit("webrtc-offer", { targetSocketId: socketId, offer });
     });
   };
-  const toggleMic = () => {
-    if (!localVideoRef.current?.srcObject) return;
 
-    localVideoRef.current.srcObject
-      .getAudioTracks()
-      .forEach(track => {
-        track.enabled = !track.enabled;
-        setMicOn(track.enabled);
-      });
+  /* ---------------- MIC ---------------- */
+  const toggleMic = () => {
+    localVideoRef.current?.srcObject
+      ?.getAudioTracks()
+      .forEach((t) => (t.enabled = !t.enabled));
+    setMicOn((p) => !p);
   };
 
-
-  /* ---------------- CHAT SEND ---------------- */
+  /* ---------------- CHAT ---------------- */
   const sendMessage = () => {
     if (!text.trim()) return;
-
-    setMessages((prev) => [
-      ...prev,
-      { message: text, userId: "You" },
-    ]);
-
+    setMessages((p) => [...p, { message: text, userId: "You" }]);
     socket.emit("send-message", {
       roomId,
       message: text,
       userId: userId.current,
     });
-
     setText("");
+  };
+
+  const startListening = () => {
+    setListening(true);
+    recognitionRef.current?.start();
   };
 
   /* ---------------- LEAVE ---------------- */
   const leaveRoomCleanup = () => {
     Object.values(peers.current).forEach((pc) => pc.close());
     peers.current = {};
-
-    if (localVideoRef.current?.srcObject) {
-      localVideoRef.current.srcObject
-        .getTracks()
-        .forEach((t) => t.stop());
-      localVideoRef.current.srcObject = null;
-    }
-
     socket.emit("leave-room", { roomId, userId: userId.current });
   };
-  const startListening = () => {
-    if (!recognitionRef.current) return;
 
-    setListening(true);
-    recognitionRef.current.start();
-  };
-
-
-  const leaveRoom = () => {
-    leaveRoomCleanup();
-    navigate("/");
-  };
-
-  /* ---------------- UI ---------------- */
   return (
-    <div style={{ textAlign: "center", marginTop: 20 }}>
-      <h2>Room: {roomId}</h2>
-      <p>Connected Users: {users.length}</p>
+    <div style={layout}>
+      {/* LEFT VIDEO */}
+      <div style={left}>
+        <h3>Room: {roomId}</h3>
 
-      <button onClick={startScreenShare} disabled={sharing} style={btn}>
-        Start Screen Share
-      </button>
-      <button onClick={toggleMic} style={btn}>
-        {micOn ? "Mute Mic 🔇" : "Unmute Mic 🎙️"}
-      </button>
-
-      <button onClick={leaveRoom} style={leaveBtn}>
-        Leave Room
-      </button>
-
-      {/* VIDEO */}
-      <div style={grid}>
         <div>
-          <p>You</p>
-          <video ref={localVideoRef} autoPlay muted style={video} />
+          <button onClick={startScreenShare} style={btn}>Share</button>
+          <button onClick={toggleMic} style={btn}>
+            {micOn ? "Mute 🔇" : "Unmute 🎙️"}
+          </button>
+          <button onClick={() => navigate("/")} style={leaveBtn}>Leave</button>
         </div>
 
-        {users.map(
-          ({ userId: uid, socketId }) =>
-            uid !== userId.current && (
-              <div key={socketId}>
-                <p>{uid}</p>
+        <video ref={localVideoRef} autoPlay muted style={video} />
+
+        <div style={grid}>
+          {users.map(
+            ({ socketId, userId: uid }) =>
+              uid !== userId.current && (
                 <video
+                  key={socketId}
                   id={`video-${socketId}`}
                   autoPlay
                   playsInline
                   style={video}
                 />
-              </div>
-            )
-        )}
+              )
+          )}
+        </div>
       </div>
 
-      {/* CHAT */}
-      <div style={chatBox}>
+      {/* RIGHT CHAT */}
+      <div style={right}>
+        <h3>Chat</h3>
+
         <div style={chatMessages}>
           {messages.map((m, i) => (
             <div key={i}>
@@ -268,21 +214,18 @@ function Room() {
           ))}
         </div>
 
-        <div>
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Type message..."
-            style={chatInput}
-            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-          />
-          <button onClick={sendMessage} style={sendBtn}>
-            Send
-          </button>
-          <button onClick={startListening} style={btn}>
-            {listening ? "Listening... 🎧" : "Speak 🎙️"}
-          </button>
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Type..."
+          style={chatInput}
+        />
 
+        <div>
+          <button onClick={sendMessage} style={btn}>Send</button>
+          <button onClick={startListening} style={btn}>
+            {listening ? "Listening..." : "🎙️ Speak"}
+          </button>
         </div>
       </div>
     </div>
@@ -290,56 +233,17 @@ function Room() {
 }
 
 /* ---------------- STYLES ---------------- */
-const btn = {
-  padding: "10px 20px",
-  margin: 10,
-  background: "#101727",
-  color: "white",
-  border: "none",
-  borderRadius: 5,
-  fontWeight: "bold",
-};
+const layout = { display: "flex", height: "100vh" };
+const left = { flex: 3, padding: 10 };
+const right = { flex: 1, borderLeft: "2px solid #101727", padding: 10 };
 
+const btn = { margin: 5, padding: "8px 12px", background: "#101727", color: "#fff", border: "none" };
 const leaveBtn = { ...btn, background: "red" };
 
-const grid = {
-  display: "flex",
-  flexWrap: "wrap",
-  justifyContent: "center",
-  gap: 15,
-  marginTop: 20,
-};
+const video = { width: 300, height: 200, border: "2px solid #101727", margin: 5 };
+const grid = { display: "flex", flexWrap: "wrap" };
 
-const video = {
-  width: 300,
-  height: 200,
-  border: "2px solid #101727",
-  borderRadius: 5,
-  objectFit: "cover",
-};
-
-const chatBox = {
-  marginTop: 20,
-  width: 300,
-  marginInline: "auto",
-};
-
-const chatMessages = {
-  border: "1px solid #101727",
-  height: 150,
-  overflowY: "auto",
-  padding: 5,
-  marginBottom: 10,
-};
-
-const chatInput = {
-  width: "70%",
-  padding: 5,
-};
-
-const sendBtn = {
-  padding: "6px 10px",
-  marginLeft: 5,
-};
+const chatMessages = { height: 300, overflowY: "auto", border: "1px solid #ccc", padding: 5 };
+const chatInput = { width: "100%", padding: 5 };
 
 export default Room;
