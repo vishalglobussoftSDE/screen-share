@@ -41,7 +41,6 @@ io.on("connection", (socket) => {
     const roomId = Math.random().toString(36).substring(2, 8);
     rooms.set(roomId, new Map());
     socket.emit("room-created", roomId);
-    console.log("📦 Room created:", roomId);
   });
 
   /* -------- JOIN ROOM -------- */
@@ -52,15 +51,19 @@ io.on("connection", (socket) => {
     }
 
     const users = rooms.get(roomId);
-    if (users.has(userId)) {
-      socket.emit("already-joined");
-      return;
-    }
 
+    // ✅ Allow reconnect (refresh fix)
     users.set(userId, socket.id);
     socket.join(roomId);
 
     emitRoomUsers(roomId);
+
+    // 🔥 Tell others someone joined
+    socket.to(roomId).emit("user-joined", {
+      userId,
+      socketId: socket.id,
+    });
+
     console.log(`👥 ${userId} joined room ${roomId}`);
   });
 
@@ -91,9 +94,9 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("receive-message", { message, userId });
   });
 
-  /* -------- LEAVE ROOM (manual) -------- */
+  /* -------- LEAVE ROOM -------- */
   socket.on("leave-room", ({ roomId, userId }) => {
-    removeUserFromRoom(roomId, userId);
+    removeUser(roomId, userId);
   });
 
   /* -------- DISCONNECT -------- */
@@ -101,20 +104,24 @@ io.on("connection", (socket) => {
     for (const [roomId, users] of rooms.entries()) {
       for (const [userId, socketId] of users.entries()) {
         if (socketId === socket.id) {
-          removeUserFromRoom(roomId, userId);
-          break;
+          removeUser(roomId, userId);
+          return;
         }
       }
     }
-    console.log("🔴 Disconnected:", socket.id);
   });
 
-  const removeUserFromRoom = (roomId, userId) => {
+  const removeUser = (roomId, userId) => {
     if (!rooms.has(roomId)) return;
 
     const users = rooms.get(roomId);
+    const socketId = users.get(userId);
+
     users.delete(userId);
     socket.leave(roomId);
+
+    // 🔥 Notify peers to close connection
+    socket.to(roomId).emit("user-left", socketId);
 
     if (users.size === 0) {
       rooms.delete(roomId);

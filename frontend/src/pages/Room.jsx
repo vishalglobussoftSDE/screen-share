@@ -8,10 +8,12 @@ function Room() {
 
   const localVideoRef = useRef(null);
   const peers = useRef({});
-  const recognitionRef = useRef(null);
+  const localStream = useRef(null);
 
-  const savedId = localStorage.getItem("userId");
-  const userId = useRef(savedId || Math.random().toString(36).substring(2, 8));
+  const userId = useRef(
+    localStorage.getItem("userId") ||
+      Math.random().toString(36).substring(2, 8)
+  );
 
   const [users, setUsers] = useState([]);
   const [sharing, setSharing] = useState(false);
@@ -19,22 +21,9 @@ function Room() {
 
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
-  const [listening, setListening] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("userId", userId.current);
-  }, []);
-
-  /* ---------------- SPEECH TO TEXT ---------------- */
-  useEffect(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
-
-    const rec = new SR();
-    rec.lang = "en-IN";
-    rec.onresult = (e) => setText(e.results[0][0].transcript);
-    rec.onend = () => setListening(false);
-    recognitionRef.current = rec;
   }, []);
 
   /* ---------------- JOIN ROOM ---------------- */
@@ -69,7 +58,7 @@ function Room() {
       peers.current[fromSocketId]?.addIceCandidate(candidate);
     });
 
-    return () => leaveRoom();
+    return () => cleanup();
   }, [roomId]);
 
   /* ---------------- PEER ---------------- */
@@ -91,34 +80,35 @@ function Room() {
       const video = document.getElementById(`video-${socketId}`);
       if (video) {
         video.srcObject = e.streams[0];
-        video.play().catch(() => {});
       }
     };
 
-    if (localVideoRef.current?.srcObject) {
-      localVideoRef.current.srcObject
-        .getTracks()
-        .forEach((t) => pc.addTrack(t, localVideoRef.current.srcObject));
+    // ✅ IMPORTANT: add tracks BEFORE offer
+    if (localStream.current) {
+      localStream.current.getTracks().forEach((track) => {
+        pc.addTrack(track, localStream.current);
+      });
     }
 
     return pc;
   };
 
-  /* ---------------- START SHARE ---------------- */
+  /* ---------------- START SCREEN + AUDIO ---------------- */
   const startScreenShare = async () => {
     if (sharing) return;
 
     const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    const stream = new MediaStream([
-      ...screen.getVideoTracks(),
-      ...mic.getAudioTracks(),
+    localStream.current = new MediaStream([
+      ...screen.getTracks(),
+      ...mic.getTracks(),
     ]);
 
-    localVideoRef.current.srcObject = stream;
+    localVideoRef.current.srcObject = localStream.current;
     setSharing(true);
 
+    // 🔥 Call every user again with correct tracks
     users.forEach(async ({ socketId, userId: uid }) => {
       if (uid === userId.current) return;
 
@@ -137,7 +127,7 @@ function Room() {
 
   /* ---------------- MIC ---------------- */
   const toggleMic = () => {
-    localVideoRef.current?.srcObject
+    localStream.current
       ?.getAudioTracks()
       .forEach((t) => (t.enabled = !t.enabled));
     setMicOn((p) => !p);
@@ -156,16 +146,15 @@ function Room() {
     setText("");
   };
 
-  const startListening = () => {
-    setListening(true);
-    recognitionRef.current?.start();
-  };
-
-  /* ---------------- LEAVE ---------------- */
-  const leaveRoom = () => {
+  /* ---------------- CLEANUP ---------------- */
+  const cleanup = () => {
     Object.values(peers.current).forEach((pc) => pc.close());
     peers.current = {};
     socket.emit("leave-room", { roomId, userId: userId.current });
+  };
+
+  const leaveRoom = () => {
+    cleanup();
     navigate("/");
   };
 
@@ -175,7 +164,7 @@ function Room() {
       <div style={left}>
         <h3>Room: {roomId}</h3>
 
-        <button onClick={startScreenShare} style={btn}>Share</button>
+        <button onClick={startScreenShare} style={btn}>Share Screen</button>
         <button onClick={toggleMic} style={btn}>
           {micOn ? "Mute 🔇" : "Unmute 🎙️"}
         </button>
@@ -216,9 +205,6 @@ function Room() {
         />
 
         <button onClick={sendMessage} style={btn}>Send</button>
-        <button onClick={startListening} style={btn}>
-          {listening ? "Listening..." : "🎙️ Speak"}
-        </button>
       </div>
     </div>
   );
