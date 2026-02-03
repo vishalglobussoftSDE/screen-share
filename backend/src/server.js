@@ -1,4 +1,3 @@
-// backend/src/server.js
 import http from "http";
 import express from "express";
 import cors from "cors";
@@ -79,6 +78,11 @@ io.on("connection", (socket) => {
       candidate,
     });
   });
+
+  socket.on("send-message", ({ roomId, message, userId }) => {
+  socket.to(roomId).emit("receive-message", { message, userId });
+});
+
 
   /* -------- DISCONNECT -------- */
   socket.on("disconnect", () => {

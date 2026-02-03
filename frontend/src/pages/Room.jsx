@@ -6,16 +6,21 @@ function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
 
-  // users = [{ userId, socketId }]
-  const [users, setUsers] = useState([]);
+  const [users, setUsers] = useState([]); // [{ userId, socketId }]
   const [sharing, setSharing] = useState(false);
 
   const localVideoRef = useRef(null);
   const peers = useRef({}); // socketId -> RTCPeerConnection
 
-  // persistent userId (same browser = same user)
+  // persistent userId
   const savedId = localStorage.getItem("userId");
   const userId = useRef(savedId || Math.random().toString(36).substring(2, 8));
+
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
+  const [micOn, setMicOn] = useState(true);
+
+
   useEffect(() => {
     localStorage.setItem("userId", userId.current);
   }, []);
@@ -31,8 +36,7 @@ function Room() {
     socket.on("already-joined", () => alert("Already joined"));
     socket.on("error", (msg) => alert(msg));
 
-    /* --------- WEBRTC SIGNALING --------- */
-
+    /* -------- WEBRTC -------- */
     socket.on("webrtc-offer", async ({ fromSocketId, offer }) => {
       if (peers.current[fromSocketId]) return;
 
@@ -57,13 +61,18 @@ function Room() {
       peers.current[fromSocketId]?.addIceCandidate(candidate);
     });
 
+    /* -------- CHAT -------- */
+    socket.on("receive-message", ({ message, userId }) => {
+      setMessages((prev) => [...prev, { message, userId }]);
+    });
+
     return () => {
       leaveRoomCleanup();
       socket.off();
     };
   }, [roomId]);
 
-  /* ---------------- PEER HELPER ---------------- */
+  /* ---------------- PEER ---------------- */
   const createPeer = (targetSocketId) => {
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -86,25 +95,26 @@ function Room() {
     if (localVideoRef.current?.srcObject) {
       localVideoRef.current.srcObject
         .getTracks()
-        .forEach((t) => pc.addTrack(t, localVideoRef.current.srcObject));
+        .forEach((t) =>
+          pc.addTrack(t, localVideoRef.current.srcObject)
+        );
     }
 
     return pc;
   };
 
-  /* ---------------- START SHARE ---------------- */
+  /* ---------------- SCREEN SHARE ---------------- */
   const startScreenShare = async () => {
     if (sharing) return;
 
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
-      audio: false,
+      audio: true,
     });
 
     localVideoRef.current.srcObject = stream;
     setSharing(true);
 
-    // create offers to all others
     users.forEach(async ({ userId: uid, socketId }) => {
       if (uid === userId.current || peers.current[socketId]) return;
 
@@ -120,14 +130,45 @@ function Room() {
       });
     });
   };
+  const toggleMic = () => {
+    if (!localVideoRef.current?.srcObject) return;
 
-  /* ---------------- LEAVE ROOM ---------------- */
+    localVideoRef.current.srcObject
+      .getAudioTracks()
+      .forEach(track => {
+        track.enabled = !track.enabled;
+        setMicOn(track.enabled);
+      });
+  };
+
+
+  /* ---------------- CHAT SEND ---------------- */
+  const sendMessage = () => {
+    if (!text.trim()) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { message: text, userId: "You" },
+    ]);
+
+    socket.emit("send-message", {
+      roomId,
+      message: text,
+      userId: userId.current,
+    });
+
+    setText("");
+  };
+
+  /* ---------------- LEAVE ---------------- */
   const leaveRoomCleanup = () => {
     Object.values(peers.current).forEach((pc) => pc.close());
     peers.current = {};
 
     if (localVideoRef.current?.srcObject) {
-      localVideoRef.current.srcObject.getTracks().forEach((t) => t.stop());
+      localVideoRef.current.srcObject
+        .getTracks()
+        .forEach((t) => t.stop());
       localVideoRef.current.srcObject = null;
     }
 
@@ -145,15 +186,18 @@ function Room() {
       <h2>Room: {roomId}</h2>
       <p>Connected Users: {users.length}</p>
 
-      <div>
-        <button onClick={startScreenShare} disabled={sharing} style={btn}>
-          Start Screen Share
-        </button>
-        <button onClick={leaveRoom} style={leaveBtn}>
-          Leave Room
-        </button>
-      </div>
+      <button onClick={startScreenShare} disabled={sharing} style={btn}>
+        Start Screen Share
+      </button>
+      <button onClick={toggleMic} style={btn}>
+        {micOn ? "Mute Mic 🔇" : "Unmute Mic 🎙️"}
+      </button>
 
+      <button onClick={leaveRoom} style={leaveBtn}>
+        Leave Room
+      </button>
+
+      {/* VIDEO */}
       <div style={grid}>
         <div>
           <p>You</p>
@@ -174,6 +218,30 @@ function Room() {
               </div>
             )
         )}
+      </div>
+
+      {/* CHAT */}
+      <div style={chatBox}>
+        <div style={chatMessages}>
+          {messages.map((m, i) => (
+            <div key={i}>
+              <b>{m.userId}:</b> {m.message}
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Type message..."
+            style={chatInput}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+          />
+          <button onClick={sendMessage} style={sendBtn}>
+            Send
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -206,6 +274,30 @@ const video = {
   border: "2px solid #101727",
   borderRadius: 5,
   objectFit: "cover",
+};
+
+const chatBox = {
+  marginTop: 20,
+  width: 300,
+  marginInline: "auto",
+};
+
+const chatMessages = {
+  border: "1px solid #101727",
+  height: 150,
+  overflowY: "auto",
+  padding: 5,
+  marginBottom: 10,
+};
+
+const chatInput = {
+  width: "70%",
+  padding: 5,
+};
+
+const sendBtn = {
+  padding: "6px 10px",
+  marginLeft: 5,
 };
 
 export default Room;
